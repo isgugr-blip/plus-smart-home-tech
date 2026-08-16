@@ -1,6 +1,5 @@
 package ru.yandex.practicum.collector.service;
 
-import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -29,10 +28,5 @@ public class HubServiceImpl implements HubService {
                 event.getTimestamp().toEpochMilli(),
                 event.getHubId(),
                 avro));
-    }
-
-    @PreDestroy
-    void shutdown() {
-        kafkaClient.stop();
     }
 }

@@ -61,9 +61,6 @@ public final class SensorEventMapper {
             case TEMPERATURE_SENSOR_EVENT -> {
                 TemperatureSensorEvent e = (TemperatureSensorEvent) event;
                 TemperatureSensorAvro payload = new TemperatureSensorAvro();
-                payload.setId(e.getId());
-                payload.setHubId(e.getHubId());
-                payload.setTimestamp(e.getTimestamp());
                 payload.setTemperatureC(e.getTemperatureC());
                 payload.setTemperatureF(e.getTemperatureF());
                 yield payload;

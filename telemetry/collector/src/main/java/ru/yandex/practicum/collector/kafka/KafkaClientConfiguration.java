@@ -8,9 +8,9 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Scope;
 import ru.yandex.practicum.kafka.serializer.GeneralAvroSerializer;
 
+import java.time.Duration;
 import java.util.Properties;
 
 @Configuration
@@ -19,9 +19,8 @@ public class KafkaClientConfiguration {
     @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
     private String bootstrapServers;
 
-    @Bean
-    @Scope("prototype")
-    KafkaClient getClient() {
+    @Bean(destroyMethod = "stop")
+    KafkaClient kafkaClient() {
         return new KafkaClient() {
 
             private Producer<String, SpecificRecordBase> producer;
@@ -46,7 +45,8 @@ public class KafkaClientConfiguration {
             @Override
             public void stop() {
                 if (producer != null) {
-                    producer.close();
+                    producer.flush();
+                    producer.close(Duration.ofSeconds(10));
                 }
             }
         };
