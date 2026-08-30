@@ -36,13 +36,13 @@ message TemperatureSensorProto {
 
 message SensorEventProto {
   string id = 1;
-  string hubId = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  google.protobuf.Timestamp timestamp = 2;
+  string hub_id = 3;
   oneof payload {
-    ClimateSensorProto climate_sensor = 4;
-    LightSensorProto light_sensor = 5;
-    MotionSensorProto motion_sensor = 6;
-    SwitchSensorProto switch_sensor = 7;
-    TemperatureSensorProto temperature_sensor = 8;
+    MotionSensorProto motion_sensor = 4;
+    TemperatureSensorProto temperature_sensor = 5;
+    LightSensorProto light_sensor = 6;
+    ClimateSensorProto climate_sensor = 7;
+    SwitchSensorProto switch_sensor = 8;
   }
 }
