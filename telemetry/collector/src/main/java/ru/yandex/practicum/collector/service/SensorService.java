@@ -1,7 +1,7 @@
 package ru.yandex.practicum.collector.service;
 
-import ru.yandex.practicum.collector.dto.SensorEvent;
+import ru.yandex.practicum.grpc.telemetry.event.SensorEventProto;
 
 public interface SensorService {
-    void send(SensorEvent event);
+    void send(SensorEventProto event);
 }

@@ -1,12 +1,8 @@
 package ru.yandex.practicum.collector.mapper;
 
-import ru.yandex.practicum.collector.dto.DeviceAction;
-import ru.yandex.practicum.collector.dto.DeviceAddedEvent;
-import ru.yandex.practicum.collector.dto.DeviceRemovedEvent;
-import ru.yandex.practicum.collector.dto.HubEvent;
-import ru.yandex.practicum.collector.dto.ScenarioAddedEvent;
-import ru.yandex.practicum.collector.dto.ScenarioCondition;
-import ru.yandex.practicum.collector.dto.ScenarioRemovedEvent;
+import ru.yandex.practicum.grpc.telemetry.event.DeviceActionProto;
+import ru.yandex.practicum.grpc.telemetry.event.HubEventProto;
+import ru.yandex.practicum.grpc.telemetry.event.ScenarioConditionProto;
 import ru.yandex.practicum.kafka.telemetry.event.ActionTypeAvro;
 import ru.yandex.practicum.kafka.telemetry.event.ConditionOperationAvro;
 import ru.yandex.practicum.kafka.telemetry.event.ConditionTypeAvro;
@@ -19,69 +15,58 @@ import ru.yandex.practicum.kafka.telemetry.event.ScenarioAddedEventAvro;
 import ru.yandex.practicum.kafka.telemetry.event.ScenarioConditionAvro;
 import ru.yandex.practicum.kafka.telemetry.event.ScenarioRemovedEventAvro;
 
+import java.time.Instant;
+
 public final class HubEventMapper {
 
     private HubEventMapper() {
     }
 
-    public static HubEventAvro toAvro(HubEvent event) {
+    public static HubEventAvro toAvro(HubEventProto event) {
         HubEventAvro avro = new HubEventAvro();
         avro.setHubId(event.getHubId());
-        avro.setTimestamp(event.getTimestamp());
+        avro.setTimestamp(Instant.ofEpochSecond(
+                event.getTimestamp().getSeconds(), event.getTimestamp().getNanos()));
         avro.setPayload(toPayload(event));
         return avro;
     }
 
-    private static Object toPayload(HubEvent event) {
-        return switch (event.getType()) {
+    private static Object toPayload(HubEventProto event) {
+        return switch (event.getPayloadCase()) {
             case DEVICE_ADDED -> {
-                DeviceAddedEvent e = (DeviceAddedEvent) event;
-                DeviceAddedEventAvro payload = new DeviceAddedEventAvro();
-                payload.setId(e.getId());
-                payload.setType(DeviceTypeAvro.valueOf(e.getDeviceType().name()));
-                yield payload;
+                var e = event.getDeviceAdded();
+                yield new DeviceAddedEventAvro(e.getId(), DeviceTypeAvro.valueOf(e.getType().name()));
             }
-            case DEVICE_REMOVED -> {
-                DeviceRemovedEvent e = (DeviceRemovedEvent) event;
-                DeviceRemovedEventAvro payload = new DeviceRemovedEventAvro();
-                payload.setId(e.getId());
-                yield payload;
-            }
+            case DEVICE_REMOVED -> new DeviceRemovedEventAvro(event.getDeviceRemoved().getId());
             case SCENARIO_ADDED -> {
-                ScenarioAddedEvent e = (ScenarioAddedEvent) event;
-                ScenarioAddedEventAvro payload = new ScenarioAddedEventAvro();
-                payload.setName(e.getName());
-                payload.setConditions(e.getConditions().stream()
-                        .map(HubEventMapper::toConditionAvro)
-                        .toList());
-                payload.setActions(e.getActions().stream()
-                        .map(HubEventMapper::toActionAvro)
-                        .toList());
-                yield payload;
+                var e = event.getScenarioAdded();
+                yield new ScenarioAddedEventAvro(
+                        e.getName(),
+                        e.getConditionsList().stream().map(HubEventMapper::toConditionAvro).toList(),
+                        e.getActionsList().stream().map(HubEventMapper::toActionAvro).toList());
             }
-            case SCENARIO_REMOVED -> {
-                ScenarioRemovedEvent e = (ScenarioRemovedEvent) event;
-                ScenarioRemovedEventAvro payload = new ScenarioRemovedEventAvro();
-                payload.setName(e.getName());
-                yield payload;
-            }
+            case SCENARIO_REMOVED -> new ScenarioRemovedEventAvro(event.getScenarioRemoved().getName());
+            case PAYLOAD_NOT_SET -> throw new IllegalArgumentException("Не задан payload события хаба");
         };
     }
 
-    private static ScenarioConditionAvro toConditionAvro(ScenarioCondition condition) {
-        ScenarioConditionAvro avro = new ScenarioConditionAvro();
-        avro.setSensorId(condition.getSensorId());
-        avro.setType(ConditionTypeAvro.valueOf(condition.getType().name()));
-        avro.setOperation(ConditionOperationAvro.valueOf(condition.getOperation().name()));
-        avro.setValue(condition.getValue());
-        return avro;
+    private static ScenarioConditionAvro toConditionAvro(ScenarioConditionProto condition) {
+        Object value = switch (condition.getValueCase()) {
+            case BOOL_VALUE -> condition.getBoolValue();
+            case INT_VALUE -> condition.getIntValue();
+            case VALUE_NOT_SET -> null;
+        };
+        return new ScenarioConditionAvro(
+                condition.getSensorId(),
+                ConditionTypeAvro.valueOf(condition.getType().name()),
+                ConditionOperationAvro.valueOf(condition.getOperation().name()),
+                value);
     }
 
-    private static DeviceActionAvro toActionAvro(DeviceAction action) {
-        DeviceActionAvro avro = new DeviceActionAvro();
-        avro.setSensorId(action.getSensorId());
-        avro.setType(ActionTypeAvro.valueOf(action.getType().name()));
-        avro.setValue(action.getValue());
-        return avro;
+    private static DeviceActionAvro toActionAvro(DeviceActionProto action) {
+        return new DeviceActionAvro(
+                action.getSensorId(),
+                ActionTypeAvro.valueOf(action.getType().name()),
+                action.hasValue() ? action.getValue() : null);
     }
 }
