@@ -1,11 +1,6 @@
 package ru.yandex.practicum.collector.mapper;
 
-import ru.yandex.practicum.collector.dto.ClimateSensorEvent;
-import ru.yandex.practicum.collector.dto.LightSensorEvent;
-import ru.yandex.practicum.collector.dto.MotionSensorEvent;
-import ru.yandex.practicum.collector.dto.SensorEvent;
-import ru.yandex.practicum.collector.dto.SwitchSensorEvent;
-import ru.yandex.practicum.collector.dto.TemperatureSensorEvent;
+import ru.yandex.practicum.grpc.telemetry.event.SensorEventProto;
 import ru.yandex.practicum.kafka.telemetry.event.ClimateSensorAvro;
 import ru.yandex.practicum.kafka.telemetry.event.LightSensorAvro;
 import ru.yandex.practicum.kafka.telemetry.event.MotionSensorAvro;
@@ -13,58 +8,46 @@ import ru.yandex.practicum.kafka.telemetry.event.SensorEventAvro;
 import ru.yandex.practicum.kafka.telemetry.event.SwitchSensorAvro;
 import ru.yandex.practicum.kafka.telemetry.event.TemperatureSensorAvro;
 
+import java.time.Instant;
+
 public final class SensorEventMapper {
 
     private SensorEventMapper() {
     }
 
-    public static SensorEventAvro toAvro(SensorEvent event) {
+    public static SensorEventAvro toAvro(SensorEventProto event) {
         SensorEventAvro avro = new SensorEventAvro();
         avro.setId(event.getId());
         avro.setHubId(event.getHubId());
-        avro.setTimestamp(event.getTimestamp());
+        avro.setTimestamp(toInstant(event));
         avro.setPayload(toPayload(event));
         return avro;
     }
 
-    private static Object toPayload(SensorEvent event) {
-        return switch (event.getType()) {
-            case CLIMATE_SENSOR_EVENT -> {
-                ClimateSensorEvent e = (ClimateSensorEvent) event;
-                ClimateSensorAvro payload = new ClimateSensorAvro();
-                payload.setTemperatureC(e.getTemperatureC());
-                payload.setHumidity(e.getHumidity());
-                payload.setCo2Level(e.getCo2Level());
-                yield payload;
+    private static Instant toInstant(SensorEventProto event) {
+        return Instant.ofEpochSecond(event.getTimestamp().getSeconds(), event.getTimestamp().getNanos());
+    }
+
+    private static Object toPayload(SensorEventProto event) {
+        return switch (event.getPayloadCase()) {
+            case CLIMATE_SENSOR -> {
+                var e = event.getClimateSensor();
+                yield new ClimateSensorAvro(e.getTemperatureC(), e.getHumidity(), e.getCo2Level());
             }
-            case LIGHT_SENSOR_EVENT -> {
-                LightSensorEvent e = (LightSensorEvent) event;
-                LightSensorAvro payload = new LightSensorAvro();
-                payload.setLinkQuality(e.getLinkQuality());
-                payload.setLuminosity(e.getLuminosity());
-                yield payload;
+            case LIGHT_SENSOR -> {
+                var e = event.getLightSensor();
+                yield new LightSensorAvro(e.getLinkQuality(), e.getLuminosity());
             }
-            case MOTION_SENSOR_EVENT -> {
-                MotionSensorEvent e = (MotionSensorEvent) event;
-                MotionSensorAvro payload = new MotionSensorAvro();
-                payload.setLinkQuality(e.getLinkQuality());
-                payload.setMotion(e.isMotion());
-                payload.setVoltage(e.getVoltage());
-                yield payload;
+            case MOTION_SENSOR -> {
+                var e = event.getMotionSensor();
+                yield new MotionSensorAvro(e.getLinkQuality(), e.getMotion(), e.getVoltage());
             }
-            case SWITCH_SENSOR_EVENT -> {
-                SwitchSensorEvent e = (SwitchSensorEvent) event;
-                SwitchSensorAvro payload = new SwitchSensorAvro();
-                payload.setState(e.isState());
-                yield payload;
+            case SWITCH_SENSOR -> new SwitchSensorAvro(event.getSwitchSensor().getState());
+            case TEMPERATURE_SENSOR -> {
+                var e = event.getTemperatureSensor();
+                yield new TemperatureSensorAvro(e.getTemperatureC(), e.getTemperatureF());
             }
-            case TEMPERATURE_SENSOR_EVENT -> {
-                TemperatureSensorEvent e = (TemperatureSensorEvent) event;
-                TemperatureSensorAvro payload = new TemperatureSensorAvro();
-                payload.setTemperatureC(e.getTemperatureC());
-                payload.setTemperatureF(e.getTemperatureF());
-                yield payload;
-            }
+            case PAYLOAD_NOT_SET -> throw new IllegalArgumentException("Не задан payload события датчика");
         };
     }
 }
