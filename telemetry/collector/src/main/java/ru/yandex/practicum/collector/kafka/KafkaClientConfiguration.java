@@ -3,24 +3,19 @@ package ru.yandex.practicum.collector.kafka;
 import org.apache.avro.specific.SpecificRecordBase;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.serialization.StringSerializer;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import ru.yandex.practicum.kafka.serializer.GeneralAvroSerializer;
 
 import java.time.Duration;
-import java.util.Properties;
+import java.util.HashMap;
 
 @Configuration
+@EnableConfigurationProperties(KafkaProperties.class)
 public class KafkaClientConfiguration {
 
-    @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
-    private String bootstrapServers;
-
     @Bean(destroyMethod = "stop")
-    KafkaClient kafkaClient() {
+    KafkaClient kafkaClient(KafkaProperties properties) {
         return new KafkaClient() {
 
             private Producer<String, SpecificRecordBase> producer;
@@ -28,18 +23,9 @@ public class KafkaClientConfiguration {
             @Override
             public Producer<String, SpecificRecordBase> getProducer() {
                 if (producer == null) {
-                    initProducer();
+                    producer = new KafkaProducer<>(new HashMap<String, Object>(properties.producer()));
                 }
                 return producer;
-            }
-
-            private void initProducer() {
-                Properties config = new Properties();
-                config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-                config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-                config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, GeneralAvroSerializer.class.getName());
-
-                producer = new KafkaProducer<>(config);
             }
 
             @Override
