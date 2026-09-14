@@ -1,7 +1,7 @@
 package ru.yandex.practicum.collector.service;
 
-import ru.yandex.practicum.collector.dto.HubEvent;
+import ru.yandex.practicum.grpc.telemetry.event.HubEventProto;
 
 public interface HubService {
-    void send(HubEvent event);
+    void send(HubEventProto event);
 }
