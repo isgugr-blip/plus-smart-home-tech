@@ -1,0 +1,6 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+  config:
+    import: file:../../infra/config-repo/telemetry/aggregator.yaml
