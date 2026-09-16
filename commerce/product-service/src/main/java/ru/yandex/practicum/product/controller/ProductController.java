@@ -34,7 +34,7 @@ public class ProductController {
     }
 
     @GetMapping("/search")
-    public List<ProductDto> search(@RequestParam(required = false) String query) {
+    public List<ProductDto> search(@RequestParam String query) {
         return service.search(query);
     }
 

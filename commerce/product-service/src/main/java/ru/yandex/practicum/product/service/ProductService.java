@@ -29,12 +29,13 @@ public class ProductService {
     }
 
     public List<ProductDto> findByCategory(Long categoryId) {
+        categoryService.getCategory(categoryId);
         return toDtos(repository.findByCategoryIdAndActiveTrue(categoryId));
     }
 
     public List<ProductDto> search(String query) {
         if (query == null || query.isBlank()) {
-            return findAllActive();
+            throw new IllegalArgumentException("Параметр query обязателен и не может быть пустым");
         }
         return toDtos(repository.findByActiveTrueAndNameContainingIgnoreCase(query.trim()));
     }
