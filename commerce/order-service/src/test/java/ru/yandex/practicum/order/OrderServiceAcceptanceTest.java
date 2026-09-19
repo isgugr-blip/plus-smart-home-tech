@@ -2,21 +2,38 @@ package ru.yandex.practicum.order;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import feign.FeignException;
+import feign.Request;
+import feign.RequestTemplate;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import ru.yandex.practicum.order.dto.CreateOrderRequest;
 import ru.yandex.practicum.order.dto.OrderItemRequest;
+import ru.yandex.practicum.order.feign.inventory.InventoryClient;
+import ru.yandex.practicum.order.feign.inventory.ReserveRequest;
+import ru.yandex.practicum.order.feign.inventory.ReserveResponse;
+import ru.yandex.practicum.order.feign.product.ProductClient;
+import ru.yandex.practicum.order.feign.product.ProductDto;
+import ru.yandex.practicum.order.repository.OrderRepository;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -25,22 +42,39 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 @SuppressWarnings("unchecked")
 class OrderServiceAcceptanceTest {
 
+    private static final ProductDto LAMP =
+            new ProductDto(1L, "Acceptance Smart Lamp", "лампа", new BigDecimal("3490.00"), true);
+    private static final ProductDto PLUG =
+            new ProductDto(2L, "Acceptance Smart Plug", "розетка", new BigDecimal("1290.00"), true);
+
     @Autowired
     private MockMvc mvc;
 
     @Autowired
     private ObjectMapper json;
 
+    @Autowired
+    private OrderRepository repository;
+
+    @MockBean
+    private ProductClient productClient;
+
+    @MockBean
+    private InventoryClient inventoryClient;
+
+    @BeforeEach
+    void setUp() {
+        when(productClient.getProductById(1L)).thenReturn(LAMP);
+        when(productClient.getProductById(2L)).thenReturn(PLUG);
+        when(inventoryClient.reserve(any())).thenReturn(new ReserveResponse(true, 10, "ok"));
+    }
+
     @Test
-    void shouldCreateOrderStoreProductSnapshotAndFindOrderByIdAndEmail() throws Exception {
+    void shouldFetchProductDataReserveStockAndStoreSnapshot() throws Exception {
         CreateOrderRequest request = new CreateOrderRequest(
                 "Acceptance Buyer",
                 "acceptance-buyer@example.com",
-                List.of(
-                        new OrderItemRequest(1L, "Acceptance Smart Lamp", 2, new BigDecimal("3490.00")),
-                        new OrderItemRequest(2L, "Acceptance Smart Plug", 1, new BigDecimal("1290.00"))
-                )
-        );
+                List.of(new OrderItemRequest(1L, 2), new OrderItemRequest(2L, 1)));
 
         MvcResult createResponse = postJson("/api/orders", request);
 
@@ -48,67 +82,149 @@ class OrderServiceAcceptanceTest {
                 .as("POST /api/orders должен создавать заказ и возвращать HTTP 201 Created")
                 .isEqualTo(201);
         Map<String, Object> created = readMap(createResponse);
-        Long orderId = asLong(created.get("id"));
-        assertThat(orderId)
-                .as("Созданный заказ должен содержать поле id")
-                .isNotNull();
         assertThat(created.get("status"))
-                .as("На текущем этапе новый заказ должен сохраняться в статусе CREATED")
-                .isEqualTo("CREATED");
+                .as("Успешно зарезервированный заказ должен сохраняться в статусе CONFIRMED")
+                .isEqualTo("CONFIRMED");
         assertThat(asDecimal(created.get("totalPrice")))
-                .as("order-service должен сам рассчитывать totalPrice по снимку товаров из запроса")
+                .as("totalPrice считается по ценам, полученным из product-service")
                 .isEqualByComparingTo("8270.00");
         assertThat((List<?>) created.get("items"))
-                .as("Заказ должен хранить позиции заказа")
+                .as("Заказ должен хранить снимок товарных данных")
                 .hasSize(2)
                 .anySatisfy(item -> assertThat((Map<String, Object>) item)
-                        .as("Позиция заказа должна хранить снимок названия и цены товара из запроса")
-                        .containsEntry("productName", "Acceptance Smart Lamp"));
+                        .containsEntry("productName", "Acceptance Smart Lamp")
+                        .containsEntry("quantity", 2));
+        verify(inventoryClient).reserve(new ReserveRequest(1L, 2));
+        verify(inventoryClient).reserve(new ReserveRequest(2L, 1));
 
+        Long orderId = asLong(created.get("id"));
         MvcResult byIdResponse = mvc.perform(get("/api/orders/{id}", orderId)).andReturn();
-
-        assertThat(status(byIdResponse))
-                .as("GET /api/orders/{id} должен возвращать созданный заказ")
-                .isEqualTo(200);
-        assertThat(readMap(byIdResponse).get("customerEmail"))
-                .as("GET /api/orders/{id} должен вернуть заказ с ожидаемым email клиента")
-                .isEqualTo("acceptance-buyer@example.com");
+        assertThat(status(byIdResponse)).isEqualTo(200);
+        assertThat(readMap(byIdResponse).get("customerEmail")).isEqualTo("acceptance-buyer@example.com");
 
         MvcResult byEmailResponse = mvc.perform(get("/api/orders/by-email")
-                .param("email", "acceptance-buyer@example.com"))
+                        .param("email", "acceptance-buyer@example.com"))
                 .andReturn();
-
-        assertThat(status(byEmailResponse))
-                .as("GET /api/orders/by-email?email=... должен возвращать заказы клиента")
-                .isEqualTo(200);
+        assertThat(status(byEmailResponse)).isEqualTo(200);
         assertThat(readList(byEmailResponse))
-                .as("Поиск заказов по email должен вернуть созданный заказ")
-                .anySatisfy(item -> assertThat(item)
-                        .containsEntry("customerEmail", "acceptance-buyer@example.com"));
+                .anySatisfy(item -> assertThat(item).containsEntry("customerEmail", "acceptance-buyer@example.com"));
+    }
+
+    @Test
+    void shouldRequestProductOnceAndReserveSummedQuantityForRepeatedProduct() throws Exception {
+        MvcResult response = postJson("/api/orders", order(new OrderItemRequest(1L, 2), new OrderItemRequest(1L, 1)));
+
+        assertThat(status(response)).isEqualTo(201);
+        verify(productClient, times(1))
+                .getProductById(1L);
+        verify(inventoryClient).reserve(new ReserveRequest(1L, 3));
+        assertThat(asDecimal(readMap(response).get("totalPrice")))
+                .as("Обе позиции должны попасть в заказ и в итоговую стоимость")
+                .isEqualByComparingTo("10470.00");
+    }
+
+    @Test
+    void shouldRejectOrderWhenProductNotFound() throws Exception {
+        when(productClient.getProductById(99L)).thenThrow(feignException(404));
+
+        MvcResult response = postJson("/api/orders", order(new OrderItemRequest(99L, 1)));
+
+        assertThat(status(response))
+                .as("Несуществующий товар — HTTP 422 Unprocessable Entity")
+                .isEqualTo(422);
+        assertThat(readMap(response).get("message").toString())
+                .as("Клиенту не показываем сырой текст FeignException")
+                .doesNotContain("FeignException")
+                .contains("не найден");
+        verify(inventoryClient, never()).reserve(any());
+    }
+
+    @Test
+    void shouldRejectOrderWhenProductIsInactive() throws Exception {
+        when(productClient.getProductById(3L))
+                .thenReturn(new ProductDto(3L, "Снятый с продажи", null, new BigDecimal("100.00"), false));
+
+        MvcResult response = postJson("/api/orders", order(new OrderItemRequest(3L, 1)));
+
+        assertThat(status(response)).isEqualTo(422);
+        assertThat(readMap(response).get("message").toString()).contains("снят с продажи");
+        verify(inventoryClient, never()).reserve(any());
+    }
+
+    @Test
+    void shouldRejectOrderWhenInventoryRecordNotFound() throws Exception {
+        when(inventoryClient.reserve(any())).thenThrow(feignException(404));
+
+        MvcResult response = postJson("/api/orders", order(new OrderItemRequest(1L, 1)));
+
+        assertThat(status(response)).isEqualTo(422);
+        assertThat(readMap(response).get("message").toString()).contains("Складская запись");
+    }
+
+    @Test
+    void shouldRejectOrderWhenStockIsInsufficient() throws Exception {
+        when(inventoryClient.reserve(any())).thenThrow(feignException(409));
+
+        MvcResult response = postJson("/api/orders", order(new OrderItemRequest(1L, 500)));
+
+        assertThat(status(response)).isEqualTo(422);
+        assertThat(readMap(response).get("message").toString()).contains("Недостаточно товара");
+    }
+
+    @Test
+    void shouldRejectOrderWhenNeighbourServiceFailsWithOtherError() throws Exception {
+        when(inventoryClient.reserve(any())).thenThrow(feignException(500));
+
+        MvcResult response = postJson("/api/orders", order(new OrderItemRequest(1L, 1)));
+
+        assertThat(status(response)).isEqualTo(422);
+        assertThat(readMap(response).get("message").toString()).doesNotContain("FeignException");
+    }
+
+    @Test
+    void shouldReleaseAlreadyCreatedReservesWhenScenarioFailsLater() throws Exception {
+        when(inventoryClient.reserve(new ReserveRequest(1L, 2)))
+                .thenReturn(new ReserveResponse(true, 5, "ok"));
+        when(inventoryClient.reserve(new ReserveRequest(2L, 1)))
+                .thenThrow(feignException(409));
+        long ordersBefore = repository.count();
+
+        MvcResult response = postJson("/api/orders",
+                order(new OrderItemRequest(1L, 2), new OrderItemRequest(2L, 1)));
+
+        assertThat(status(response)).isEqualTo(422);
+        verify(inventoryClient)
+                .release(new ReserveRequest(1L, 2));
+        assertThat(repository.count())
+                .as("Заказ не должен сохраняться при сорванном сценарии")
+                .isEqualTo(ordersBefore);
     }
 
     @Test
     void shouldReturnBadRequestForInvalidOrderPayload() throws Exception {
-        CreateOrderRequest invalidRequest = new CreateOrderRequest(
-                "",
-                "not-an-email",
-                List.of()
-        );
-
-        MvcResult response = postJson("/api/orders", invalidRequest);
+        MvcResult response = postJson("/api/orders", new CreateOrderRequest("", "not-an-email", List.of()));
 
         assertThat(status(response))
                 .as("POST /api/orders с невалидным телом запроса должен возвращать HTTP 400 Bad Request")
                 .isEqualTo(400);
-        assertThat(readMap(response))
-                .as("Ответ ошибки должен содержать сообщение и детали валидации")
-                .containsKeys("message", "validationErrors");
+        assertThat(readMap(response)).containsKeys("message", "validationErrors");
+    }
+
+    private static CreateOrderRequest order(OrderItemRequest... items) {
+        return new CreateOrderRequest("Acceptance Buyer", "acceptance-buyer@example.com", List.of(items));
+    }
+
+    private static FeignException feignException(int status) {
+        Request request = Request.create(Request.HttpMethod.POST, "/stub", Map.of(), new byte[0],
+                StandardCharsets.UTF_8, new RequestTemplate());
+        return FeignException.errorStatus("stub",
+                feign.Response.builder().status(status).request(request).build());
     }
 
     private MvcResult postJson(String url, Object body) throws Exception {
         return mvc.perform(post(url)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(json.writeValueAsString(body)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(body)))
                 .andReturn();
     }
 
@@ -117,12 +233,12 @@ class OrderServiceAcceptanceTest {
     }
 
     private Map<String, Object> readMap(MvcResult result) throws Exception {
-        return json.readValue(result.getResponse().getContentAsString(), new TypeReference<>() {
+        return json.readValue(result.getResponse().getContentAsByteArray(), new TypeReference<>() {
         });
     }
 
     private List<Map<String, Object>> readList(MvcResult result) throws Exception {
-        return json.readValue(result.getResponse().getContentAsString(), new TypeReference<>() {
+        return json.readValue(result.getResponse().getContentAsByteArray(), new TypeReference<>() {
         });
     }
 
