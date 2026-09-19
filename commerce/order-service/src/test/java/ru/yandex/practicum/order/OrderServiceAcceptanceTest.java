@@ -16,6 +16,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import ru.yandex.practicum.order.dto.CreateOrderRequest;
 import ru.yandex.practicum.order.dto.OrderItemRequest;
+import ru.yandex.practicum.order.exception.InventoryServiceUnavailableException;
+import ru.yandex.practicum.order.exception.ProductServiceUnavailableException;
 import ru.yandex.practicum.order.feign.inventory.InventoryClient;
 import ru.yandex.practicum.order.feign.inventory.ReserveRequest;
 import ru.yandex.practicum.order.feign.inventory.ReserveResponse;
@@ -167,7 +169,9 @@ class OrderServiceAcceptanceTest {
 
         MvcResult response = postJson("/api/orders", order(new OrderItemRequest(1L, 500)));
 
-        assertThat(status(response)).isEqualTo(422);
+        assertThat(status(response))
+                .as("409 от склада — бизнес-отказ, а не техническая деградация")
+                .isEqualTo(422);
         assertThat(readMap(response).get("message").toString()).contains("Недостаточно товара");
     }
 
@@ -219,6 +223,68 @@ class OrderServiceAcceptanceTest {
                 StandardCharsets.UTF_8, new RequestTemplate());
         return FeignException.errorStatus("stub",
                 feign.Response.builder().status(status).request(request).build());
+    }
+
+    @Test
+    void shouldSaveOrderAsPendingConfirmationWhenProductServiceIsUnavailable() throws Exception {
+        when(productClient.getProductById(1L))
+                .thenThrow(new ProductServiceUnavailableException(1L, new RuntimeException("connect timed out")));
+
+        MvcResult response = postJson("/api/orders", order(new OrderItemRequest(1L, 2)));
+
+        assertThat(status(response))
+                .as("Техническая недоступность каталога не должна отклонять заказ")
+                .isEqualTo(201);
+        Map<String, Object> created = readMap(response);
+        assertThat(created.get("status"))
+                .as("При недоступности product-service заказ сохраняется как PENDING_CONFIRMATION")
+                .isEqualTo("PENDING_CONFIRMATION");
+        assertThat(created.get("statusDetails").toString())
+                .as("В деталях статуса должно быть указано, что заказ требует ручной проверки")
+                .contains("ручной проверки");
+        assertThat(asDecimal(created.get("totalPrice"))).isEqualByComparingTo("0.00");
+        assertThat((List<Map<String, Object>>) created.get("items"))
+                .as("Связь с выбранным товаром должна сохраниться даже без данных каталога")
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(asLong(item.get("productId"))).isEqualTo(1L);
+                    assertThat(item.get("productName")).isEqualTo("Товар #1 (ожидает проверки)");
+                    assertThat(asDecimal(item.get("price"))).isEqualByComparingTo("0.00");
+                });
+    }
+
+    @Test
+    void shouldSaveOrderAsPendingConfirmationWhenInventoryServiceIsUnavailable() throws Exception {
+        when(inventoryClient.reserve(any()))
+                .thenThrow(new InventoryServiceUnavailableException(1L, new RuntimeException("circuit breaker open")));
+
+        MvcResult response = postJson("/api/orders", order(new OrderItemRequest(1L, 2)));
+
+        assertThat(status(response)).isEqualTo(201);
+        Map<String, Object> created = readMap(response);
+        assertThat(created.get("status"))
+                .as("Неподтверждённый резерв не даёт статус CONFIRMED")
+                .isEqualTo("PENDING_CONFIRMATION");
+        assertThat(created.get("statusDetails").toString()).contains("ручной проверки");
+        assertThat(asDecimal(created.get("totalPrice")))
+                .as("Данные каталога получены, поэтому цена в снимке сохраняется")
+                .isEqualByComparingTo("6980.00");
+        verify(inventoryClient, never()).release(any());
+    }
+
+    @Test
+    void shouldKeepSuccessfulReserveWhenOnlyPartOfWarehouseCallsDegraded() throws Exception {
+        when(inventoryClient.reserve(new ReserveRequest(1L, 2)))
+                .thenReturn(new ReserveResponse(true, 5, "ok"));
+        when(inventoryClient.reserve(new ReserveRequest(2L, 1)))
+                .thenThrow(new InventoryServiceUnavailableException(2L, new RuntimeException("timeout")));
+
+        MvcResult response = postJson("/api/orders",
+                order(new OrderItemRequest(1L, 2), new OrderItemRequest(2L, 1)));
+
+        assertThat(status(response)).isEqualTo(201);
+        assertThat(readMap(response).get("status")).isEqualTo("PENDING_CONFIRMATION");
+        verify(inventoryClient, never()).release(any());
     }
 
     private MvcResult postJson(String url, Object body) throws Exception {
