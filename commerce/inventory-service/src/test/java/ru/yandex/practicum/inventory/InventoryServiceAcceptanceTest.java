@@ -116,6 +116,37 @@ class InventoryServiceAcceptanceTest {
                 .containsKeys("message", "validationErrors");
     }
 
+    @Test
+    void shouldReleaseReservedStockAndRejectInvalidRelease() throws Exception {
+        long productId = 100_004L;
+        postJson("/api/inventory", new UpdateInventoryRequest(productId, 10));
+        postJson("/api/inventory/reserve", new ReserveRequest(productId, 6));
+
+        MvcResult releaseResponse = postJson("/api/inventory/release", new ReserveRequest(productId, 4));
+
+        assertThat(status(releaseResponse))
+                .as("POST /api/inventory/release должен снимать резерв и возвращать HTTP 200 OK")
+                .isEqualTo(200);
+        assertThat(readMap(releaseResponse))
+                .as("Ответ снятия резерва должен быть в том же формате, что и резервирование")
+                .containsKeys("success", "availableQuantity", "message");
+
+        Map<String, Object> item = readMap(mvc.perform(get("/api/inventory/{productId}", productId)).andReturn());
+        assertThat(asInt(item.get("reservedQuantity")))
+                .as("Снятие резерва должно уменьшать зарезервированное количество")
+                .isEqualTo(2);
+        assertThat(asInt(item.get("availableQuantity")))
+                .as("После снятия резерва доступное количество должно вырасти")
+                .isEqualTo(8);
+
+        assertThat(status(postJson("/api/inventory/release", new ReserveRequest(productId, 99))))
+                .as("Снятие резерва больше зарезервированного — HTTP 400 Bad Request")
+                .isEqualTo(400);
+        assertThat(status(postJson("/api/inventory/release", new ReserveRequest(999_999L, 1))))
+                .as("Снятие резерва по несуществующей складской записи — HTTP 404 Not Found")
+                .isEqualTo(404);
+    }
+
     private MvcResult postJson(String url, Object body) throws Exception {
         return mvc.perform(post(url)
                 .contentType(MediaType.APPLICATION_JSON)
